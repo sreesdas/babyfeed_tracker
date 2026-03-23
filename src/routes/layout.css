@@ -1,0 +1,82 @@
+@import url('https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&family=Fredoka:wght@500;600;700&display=swap');
+
+:root {
+  --primary: #FF9EBB; /* pastel pink */
+  --primary-hover: #FF7FA5;
+  --secondary: #A0DEFF; /* pastel blue */
+  --bg-gradient-start: #FFF0F5; /* lavender blush */
+  --bg-gradient-end: #E0F7FA;
+  --text-main: #4A4A4A;
+  --text-muted: #8E8E8E;
+  --card-bg: rgba(255, 255, 255, 0.95);
+  --card-shadow: 0 16px 32px -8px rgba(255, 158, 187, 0.15), 0 8px 16px -8px rgba(160, 222, 255, 0.2);
+  --danger: #FFA0A0; /* soft red */
+  --danger-hover: #FF7B7B;
+  --success: #A8E6CF; /* pastel green */
+  --success-hover: #81D4B5;
+  --border: rgba(255, 158, 187, 0.3);
+  font-family: 'Nunito', system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: linear-gradient(135deg, var(--bg-gradient-start), var(--bg-gradient-end));
+  color: var(--text-main);
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 16px;
+}
+
+#svelte, body > div {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 1.5rem;
+}
+
+/* Base App Container for layout.svelte */
+.app-container {
+  width: 100%;
+  max-width: 650px; /* Made wider from 480px -> 650px */
+  height: 90vh;
+  max-height: 900px;
+  background: var(--card-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-radius: 40px; /* More rounded, cuter */
+  box-shadow: var(--card-shadow);
+  border: 2px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+button {
+  font-family: 'Fredoka', sans-serif; /* Chonky cute font for buttons */
+  cursor: pointer;
+  border: none;
+  outline: none;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+button:active {
+  transform: scale(0.92);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  color: var(--text-main);
+  font-family: 'Fredoka', sans-serif;
+  letter-spacing: 0.02em;
+}
+
+ul {
+  list-style: none;
+}
