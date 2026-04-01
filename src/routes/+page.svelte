@@ -19,10 +19,14 @@
   let isPaused = $state(false);
   let selectedSide = $state<'L' | 'R'>('R');
   let intervalId: number | ReturnType<typeof setInterval> | null = null;
+  let showAlarmModal = $state(false);
+  let alarmFired = $state(false);
+  let alarmAudioCtx: AudioContext | null = null;
+  let alarmInterval: number | null = null;
 
   // Determine if a feeding is in progress (running OR paused)
   let isTracking = $derived(feedingStartTime !== null);
-  
+
   let dataLoaded = $state(false);
 
   onMount(async () => {
@@ -86,11 +90,64 @@
     }));
   });
 
+  const ALARM_THRESHOLD = 30 * 60; // 30 minutes in seconds
+
+  function playAlarmTone() {
+    alarmAudioCtx = new AudioContext();
+    const ctx = alarmAudioCtx;
+
+    function beep() {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(1100, ctx.currentTime + 0.15);
+      osc.frequency.setValueAtTime(880, ctx.currentTime + 0.3);
+      gain.gain.setValueAtTime(0.6, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.5);
+    }
+
+    beep();
+    alarmInterval = window.setInterval(beep, 1200);
+  }
+
+  function stopAlarmTone() {
+    if (alarmInterval !== null) {
+      clearInterval(alarmInterval);
+      alarmInterval = null;
+    }
+    if (alarmAudioCtx) {
+      alarmAudioCtx.close();
+      alarmAudioCtx = null;
+    }
+  }
+
+  function triggerAlarm() {
+    alarmFired = true;
+    showAlarmModal = true;
+    playAlarmTone();
+  }
+
+  function acknowledgeAlarm(continueFeeding: boolean) {
+    stopAlarmTone();
+    showAlarmModal = false;
+    if (!continueFeeding) {
+      endFeeding();
+    }
+  }
+
   function startInterval() {
     if (intervalId) clearInterval(intervalId);
     intervalId = setInterval(() => {
       if (resumeTime) {
         elapsedTime = accumulatedSeconds + Math.floor((Date.now() - resumeTime) / 1000);
+        if (!alarmFired && elapsedTime >= ALARM_THRESHOLD) {
+          triggerAlarm();
+        }
       }
     }, 1000);
   }
@@ -108,6 +165,7 @@
     accumulatedSeconds = 0;
     elapsedTime = 0;
     isPaused = false;
+    alarmFired = false;
     startInterval();
   }
 
@@ -151,6 +209,7 @@
       accumulatedSeconds = 0;
       elapsedTime = 0;
       isPaused = false;
+      alarmFired = false;
       stopInterval();
     }
   }
@@ -237,6 +296,20 @@
       {/if}
     </div>
   </div>
+
+  {#if showAlarmModal}
+    <div class="alarm-overlay">
+      <div class="alarm-modal">
+        <div class="alarm-icon">⏰</div>
+        <h2>30 Minutes!</h2>
+        <p>The feeding has reached 30 minutes. Should the timer continue?</p>
+        <div class="alarm-actions">
+          <button class="btn btn-resume alarm-btn" onclick={() => acknowledgeAlarm(true)}>Continue</button>
+          <button class="btn btn-end alarm-btn" onclick={() => acknowledgeAlarm(false)}>End Feeding</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 
   <div class="history-section">
     <h2>Recent Feedings</h2>
@@ -624,6 +697,72 @@
     font-size: 3.5rem;
     margin-bottom: 1rem;
     opacity: 0.5;
+  }
+
+  .alarm-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    animation: fadeIn 0.2s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  .alarm-modal {
+    background: white;
+    border-radius: 32px;
+    padding: 2.5rem 2rem;
+    max-width: 340px;
+    width: 90%;
+    text-align: center;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.18);
+    animation: popIn 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  }
+
+  @keyframes popIn {
+    from { transform: scale(0.85); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
+  .alarm-icon {
+    font-size: 3.5rem;
+    margin-bottom: 0.75rem;
+    animation: shake 0.6s ease-in-out infinite;
+  }
+
+  @keyframes shake {
+    0%, 100% { transform: rotate(-8deg); }
+    50% { transform: rotate(8deg); }
+  }
+
+  .alarm-modal h2 {
+    font-size: 1.8rem;
+    color: var(--primary-hover);
+    margin-bottom: 0.5rem;
+  }
+
+  .alarm-modal p {
+    color: var(--text-muted);
+    font-size: 1rem;
+    margin-bottom: 1.75rem;
+    line-height: 1.5;
+  }
+
+  .alarm-actions {
+    display: flex;
+    gap: 0.75rem;
+  }
+
+  .alarm-btn {
+    font-size: 1.1rem;
+    padding: 0.9rem 1.25rem;
   }
 
   /* Custom Scrollbar */
