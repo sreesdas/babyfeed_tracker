@@ -52,18 +52,16 @@
     // Only persist after initial load to avoid overwriting with empty state
     if (!dataLoaded) return;
 
-    if (sessions.length > 0) {
-      setItem('feedingSessions', sessions);
-    }
+    setItem('feedingSessions', $state.snapshot(sessions));
     // Persist active feeding state
     if (feedingStartTime) {
-      setItem('currentFeedingState', {
+      setItem('currentFeedingState', $state.snapshot({
         feedingStartTime,
         resumeTime,
         accumulatedSeconds,
         isPaused,
         selectedSide
-      });
+      }));
     } else {
       removeItem('currentFeedingState');
     }
