@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { getItem, setItem, removeItem } from '$lib/storage.js';
   import { uuid } from '$lib/utils.js';
+  import { db } from '$lib/firebase.js';
+  import { collection, doc, onSnapshot, setDoc, deleteDoc, query, orderBy } from 'firebase/firestore';
 
   type Session = {
     id: string;
@@ -12,10 +13,10 @@
   };
 
   let sessions = $state<Session[]>([]);
-  let feedingStartTime = $state<number | null>(null); // the original start timestamp
-  let resumeTime = $state<number | null>(null); // when the current running segment began
-  let accumulatedSeconds = $state(0); // total seconds accumulated from previous segments (before pauses)
-  let elapsedTime = $state(0); // display value
+  let feedingStartTime = $state<number | null>(null);
+  let resumeTime = $state<number | null>(null);
+  let accumulatedSeconds = $state(0);
+  let elapsedTime = $state(0);
   let isPaused = $state(false);
   let selectedSide = $state<'L' | 'R'>('R');
   let intervalId: number | ReturnType<typeof setInterval> | null = null;
@@ -24,51 +25,55 @@
   let alarmAudioCtx: AudioContext | null = null;
   let alarmInterval: number | null = null;
 
-  // Determine if a feeding is in progress (running OR paused)
   let isTracking = $derived(feedingStartTime !== null);
 
-  let dataLoaded = $state(false);
-
-  onMount(async () => {
-    const stored = await getItem('feedingSessions');
-    if (stored) {
-      sessions = stored;
-    }
-    // Restore an active feeding session
-    const savedState = await getItem('currentFeedingState');
-    if (savedState) {
-      feedingStartTime = savedState.feedingStartTime;
-      accumulatedSeconds = savedState.accumulatedSeconds;
-      isPaused = savedState.isPaused;
-      selectedSide = savedState.selectedSide ?? 'R';
-      if (isPaused) {
-        elapsedTime = accumulatedSeconds;
-      } else {
-        resumeTime = savedState.resumeTime;
-        elapsedTime = accumulatedSeconds + Math.floor((Date.now() - (resumeTime ?? Date.now())) / 1000);
-        startInterval();
+  onMount(() => {
+    const unsubSessions = onSnapshot(
+      query(collection(db, 'sessions'), orderBy('startTime', 'desc')),
+      (snapshot) => {
+        sessions = snapshot.docs.map(d => d.data() as Session);
       }
-    }
-    dataLoaded = true;
-  });
+    );
 
-  $effect(() => {
-    // Only persist after initial load to avoid overwriting with empty state
-    if (!dataLoaded) return;
+    const unsubState = onSnapshot(doc(db, 'meta', 'currentState'), (docSnap) => {
+      const wasRunning = intervalId !== null;
 
-    setItem('feedingSessions', $state.snapshot(sessions));
-    // Persist active feeding state
-    if (feedingStartTime) {
-      setItem('currentFeedingState', $state.snapshot({
-        feedingStartTime,
-        resumeTime,
-        accumulatedSeconds,
-        isPaused,
-        selectedSide
-      }));
-    } else {
-      removeItem('currentFeedingState');
-    }
+      if (docSnap.exists()) {
+        const s = docSnap.data();
+        const isNewFeeding = feedingStartTime !== s.feedingStartTime;
+
+        feedingStartTime = s.feedingStartTime ?? null;
+        accumulatedSeconds = s.accumulatedSeconds ?? 0;
+        isPaused = s.isPaused ?? false;
+        selectedSide = s.selectedSide ?? 'R';
+
+        if (isNewFeeding) alarmFired = false;
+
+        if (isPaused) {
+          resumeTime = null;
+          elapsedTime = accumulatedSeconds;
+          if (wasRunning) stopInterval();
+        } else {
+          resumeTime = s.resumeTime ?? null;
+          elapsedTime = accumulatedSeconds + Math.floor((Date.now() - (s.resumeTime ?? Date.now())) / 1000);
+          if (!wasRunning) startInterval();
+        }
+      } else {
+        feedingStartTime = null;
+        resumeTime = null;
+        accumulatedSeconds = 0;
+        isPaused = false;
+        elapsedTime = 0;
+        alarmFired = false;
+        if (wasRunning) stopInterval();
+      }
+    });
+
+    return () => {
+      unsubSessions();
+      unsubState();
+      stopInterval();
+    };
   });
 
   let groupedSessions = $derived.by(() => {
@@ -159,59 +164,58 @@
     }
   }
 
-  function startFeeding() {
-    feedingStartTime = Date.now();
-    resumeTime = Date.now();
-    accumulatedSeconds = 0;
-    elapsedTime = 0;
-    isPaused = false;
-    alarmFired = false;
-    startInterval();
+  async function startFeeding() {
+    const now = Date.now();
+    await setDoc(doc(db, 'meta', 'currentState'), {
+      feedingStartTime: now,
+      resumeTime: now,
+      accumulatedSeconds: 0,
+      isPaused: false,
+      selectedSide
+    });
   }
 
-  function pauseFeeding() {
-    // Freeze the current running segment into accumulated
-    if (resumeTime) {
-      accumulatedSeconds += Math.floor((Date.now() - resumeTime) / 1000);
+  async function pauseFeeding() {
+    const newAccumulated = accumulatedSeconds + (resumeTime ? Math.floor((Date.now() - resumeTime) / 1000) : 0);
+    await setDoc(doc(db, 'meta', 'currentState'), {
+      feedingStartTime,
+      resumeTime: null,
+      accumulatedSeconds: newAccumulated,
+      isPaused: true,
+      selectedSide
+    });
+  }
+
+  async function resumeFeeding() {
+    await setDoc(doc(db, 'meta', 'currentState'), {
+      feedingStartTime,
+      resumeTime: Date.now(),
+      accumulatedSeconds,
+      isPaused: false,
+      selectedSide
+    });
+  }
+
+  async function endFeeding() {
+    if (!feedingStartTime) return;
+
+    let duration = accumulatedSeconds;
+    if (!isPaused && resumeTime) {
+      duration += Math.floor((Date.now() - resumeTime) / 1000);
     }
-    elapsedTime = accumulatedSeconds;
-    resumeTime = null;
-    isPaused = true;
-    stopInterval();
-  }
 
-  function resumeFeeding() {
-    resumeTime = Date.now();
-    isPaused = false;
-    startInterval();
-  }
+    const newSession: Session = {
+      id: uuid(),
+      startTime: feedingStartTime,
+      endTime: Date.now(),
+      duration,
+      side: selectedSide
+    };
 
-  function endFeeding() {
-    if (feedingStartTime) {
-      const endTime = Date.now();
-      // If running, add the current segment; if paused, use accumulated
-      let duration = accumulatedSeconds;
-      if (!isPaused && resumeTime) {
-        duration += Math.floor((Date.now() - resumeTime) / 1000);
-      }
-      
-      const newSession: Session = {
-        id: uuid(),
-        startTime: feedingStartTime,
-        endTime,
-        duration,
-        side: selectedSide
-      };
-      
-      sessions = [newSession, ...sessions];
-      feedingStartTime = null;
-      resumeTime = null;
-      accumulatedSeconds = 0;
-      elapsedTime = 0;
-      isPaused = false;
-      alarmFired = false;
-      stopInterval();
-    }
+    await Promise.all([
+      setDoc(doc(db, 'sessions', newSession.id), newSession),
+      deleteDoc(doc(db, 'meta', 'currentState'))
+    ]);
   }
 
   function formatDuration(seconds: number) {
